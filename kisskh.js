@@ -2,18 +2,18 @@ const cheerio = require('cheerio-without-node-native');
 
 const MAIN_URL = "https://kisskh.ovh";
 
-// Google Script API
 const KISSKH_API =
     "https://script.google.com/macros/s/AKfycbzn8B31PuDxzaMa9_CQ0VGEDasFqfzI5bXvjaIZH4DM8DNq9q6xj1ALvZNz_JT3jF0suA/exec?id=";
 
 function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
+
     return new Promise((resolve) => {
 
-        // Fetch TMDB details first
         const tmdbUrl =
             `https://api.themoviedb.org/3/${mediaType}/${tmdbId}?api_key=b030404650f279792a8d3287232358e3`;
 
         fetch(tmdbUrl)
+
             .then(res => res.json())
 
             .then(tmdbData => {
@@ -23,7 +23,6 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                     tmdbData.name ||
                     tmdbData.original_title;
 
-                // Search drama/movie
                 const searchUrl =
                     `${MAIN_URL}/api/DramaList/Search?q=${encodeURIComponent(title)}&type=0`;
 
@@ -51,7 +50,7 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                     });
             })
 
-            // Get episode list
+            // Get drama details
             .then(dramaId => {
 
                 return fetch(
@@ -68,11 +67,16 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
 
                         let targetEp;
 
+                        // Movie
                         if (mediaType === "movie") {
 
-                            targetEp = episodes[episodes.length - 1];
+                            targetEp =
+                                episodes[episodes.length - 1];
 
-                        } else {
+                        }
+
+                        // TV
+                        else {
 
                             targetEp = episodes.find(
                                 ep =>
@@ -81,21 +85,25 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                         }
 
                         if (!targetEp) {
-                            throw new Error(`Episode ${episodeNum} not found`);
+                            throw new Error(
+                                `Episode ${episodeNum} not found`
+                            );
                         }
 
                         return targetEp.id;
                     });
             })
 
-            // Get video key
+            // Get stream key
             .then(epsId => {
 
                 const keyUrl =
                     `${KISSKH_API}${epsId}&version=2.8.10`;
 
                 return fetch(keyUrl)
+
                     .then(res => res.json())
+
                     .then(keyData => {
 
                         if (!keyData.key) {
@@ -109,22 +117,22 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                     });
             })
 
-            // Process sources
+            // Process stream data
             .then(res => res.json())
 
             .then(sources => {
 
                 console.log(
-                    "KISSKH SOURCES:",
+                    "KISSKH FULL RESPONSE:",
                     JSON.stringify(sources, null, 2)
                 );
 
                 const streams = [];
 
-                // -------------------------
-                // SUBTITLES
-                // -------------------------
-                const subtitles = [];
+                // =========================
+                // SUBTITLE EXTRACTION
+                // =========================
+                const captions = [];
 
                 const subtitleSources =
                     sources.subtitles ||
@@ -132,7 +140,13 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                     sources.tracks ||
                     sources.Tracks ||
                     sources.captions ||
+                    sources.Captions ||
                     [];
+
+                console.log(
+                    "SUBTITLE DATA:",
+                    JSON.stringify(subtitleSources, null, 2)
+                );
 
                 subtitleSources.forEach(sub => {
 
@@ -143,19 +157,19 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
 
                     if (!subUrl) return;
 
-                    subtitles.push({
-                        lang:
+                    captions.push({
+                        url: subUrl,
+                        language:
                             sub.label ||
                             sub.lang ||
                             sub.language ||
-                            "Unknown",
-                        url: subUrl
+                            "English"
                     });
                 });
 
-                // -------------------------
+                // =========================
                 // VIDEO LINKS
-                // -------------------------
+                // =========================
                 const links = [
                     sources.Video,
                     sources.ThirdParty
@@ -177,7 +191,7 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                                 "Referer": MAIN_URL
                             },
 
-                            subtitles: subtitles,
+                            captions: captions,
 
                             provider: "kisskh"
                         });
@@ -196,12 +210,17 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                                 "Referer": MAIN_URL
                             },
 
-                            subtitles: subtitles,
+                            captions: captions,
 
                             provider: "kisskh"
                         });
                     }
                 });
+
+                console.log(
+                    "FINAL STREAMS:",
+                    JSON.stringify(streams, null, 2)
+                );
 
                 resolve(streams);
             })
