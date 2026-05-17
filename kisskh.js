@@ -1,5 +1,3 @@
-const cheerio = require('cheerio-without-node-native');
-
 const MAIN_URL = "https://kisskh.ovh";
 
 const KISSKH_API =
@@ -27,7 +25,9 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                     `${MAIN_URL}/api/DramaList/Search?q=${encodeURIComponent(title)}&type=0`;
 
                 return fetch(searchUrl)
+
                     .then(res => res.json())
+
                     .then(searchList => {
 
                         let matched =
@@ -37,7 +37,6 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                                     item.title.toLowerCase() === title.toLowerCase()
                             );
 
-                        // fallback first result
                         if (!matched && searchList.length > 0) {
                             matched = searchList[0];
                         }
@@ -50,51 +49,46 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                     });
             })
 
-            // Get drama details
             .then(dramaId => {
 
                 return fetch(
                     `${MAIN_URL}/api/DramaList/Drama/${dramaId}?isq=false`
                 )
+
                     .then(res => res.json())
+
                     .then(detail => {
 
                         const episodes = detail.episodes;
 
                         if (!episodes || episodes.length === 0) {
-                            throw new Error("No episodes found");
+                            throw new Error("No episodes");
                         }
 
                         let targetEp;
 
-                        // Movie
                         if (mediaType === "movie") {
 
                             targetEp =
                                 episodes[episodes.length - 1];
 
-                        }
+                        } else {
 
-                        // TV
-                        else {
-
-                            targetEp = episodes.find(
-                                ep =>
-                                    parseInt(ep.number) === parseInt(episodeNum)
-                            );
+                            targetEp =
+                                episodes.find(
+                                    ep =>
+                                        parseInt(ep.number) === parseInt(episodeNum)
+                                );
                         }
 
                         if (!targetEp) {
-                            throw new Error(
-                                `Episode ${episodeNum} not found`
-                            );
+                            throw new Error("Episode not found");
                         }
 
                         return targetEp.id;
                     });
             })
 
-            // Get stream key
             .then(epsId => {
 
                 const keyUrl =
@@ -107,7 +101,7 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                     .then(keyData => {
 
                         if (!keyData.key) {
-                            throw new Error("Failed to get video key");
+                            throw new Error("No key");
                         }
 
                         const videoApi =
@@ -117,49 +111,46 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                     });
             })
 
-            // Process stream data
             .then(res => res.json())
 
             .then(sources => {
 
                 console.log(
-                    "KISSKH FULL RESPONSE:",
+                    "FULL API RESPONSE:",
                     JSON.stringify(sources, null, 2)
                 );
 
                 const streams = [];
 
                 // =========================
-                // SUBTITLE EXTRACTION
+                // SUBTITLES
                 // =========================
-                const captions = [];
+                const subtitles = [];
 
                 const subtitleSources =
                     sources.subtitles ||
                     sources.Subtitles ||
                     sources.tracks ||
                     sources.Tracks ||
-                    sources.captions ||
-                    sources.Captions ||
                     [];
 
                 console.log(
-                    "SUBTITLE DATA:",
+                    "SUBTITLE SOURCES:",
                     JSON.stringify(subtitleSources, null, 2)
                 );
 
                 subtitleSources.forEach(sub => {
 
-                    const subUrl =
+                    const subFile =
                         sub.src ||
                         sub.file ||
                         sub.url;
 
-                    if (!subUrl) return;
+                    if (!subFile) return;
 
-                    captions.push({
-                        url: subUrl,
-                        language:
+                    subtitles.push({
+                        file: subFile,
+                        label:
                             sub.label ||
                             sub.lang ||
                             sub.language ||
@@ -168,7 +159,7 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
                 });
 
                 // =========================
-                // VIDEO LINKS
+                // STREAM LINKS
                 // =========================
                 const links = [
                     sources.Video,
@@ -177,44 +168,24 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
 
                 links.forEach(link => {
 
-                    // HLS
-                    if (link.includes(".m3u8")) {
+                    streams.push({
 
-                        streams.push({
-                            name: "Kisskh HLS",
-                            title: "Kisskh Stream",
-                            url: link,
-                            quality: "Auto",
+                        name: "Kisskh",
+                        title: "Kisskh Stream",
 
-                            headers: {
-                                "Origin": MAIN_URL,
-                                "Referer": MAIN_URL
-                            },
+                        url: link,
 
-                            captions: captions,
+                        quality: "Auto",
 
-                            provider: "kisskh"
-                        });
-                    }
+                        headers: {
+                            "Origin": MAIN_URL,
+                            "Referer": MAIN_URL
+                        },
 
-                    // MP4
-                    else if (link.includes(".mp4")) {
+                        subtitles: subtitles,
 
-                        streams.push({
-                            name: "Kisskh MP4",
-                            title: "Kisskh Stream",
-                            url: link,
-                            quality: "Auto",
-
-                            headers: {
-                                "Referer": MAIN_URL
-                            },
-
-                            captions: captions,
-
-                            provider: "kisskh"
-                        });
-                    }
+                        provider: "kisskh"
+                    });
                 });
 
                 console.log(
@@ -227,7 +198,10 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
 
             .catch(err => {
 
-                console.error("Kisskh Error:", err);
+                console.error(
+                    "KISSKH ERROR:",
+                    err
+                );
 
                 resolve([]);
             });
