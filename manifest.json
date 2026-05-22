@@ -14,7 +14,7 @@
       "formats": ["mp4", "m3u8"],
       "logo": "https://i.postimg.cc/2yLnTzPP/kisskh.jpg",
       "contentLanguage": ["ko", "ch", "ja", "th", "fr"]
-    }
+    },
     {
       "id": "voirdrama",
       "name": "VoirDrama",
@@ -27,6 +27,6 @@
       "formats": ["mp4", "m3u8", "mkv"],
       "logo": "https://i.postimg.cc/Z5F3ndTL/vidsync.png",
       "contentLanguage": ["fr"]
-    },
+    }
   ]
 }
