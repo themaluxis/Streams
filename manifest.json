@@ -1,6 +1,6 @@
 {
   "name": "MaluStreams",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "scrapers": [
     {
       "id": "kisskh",
@@ -19,7 +19,7 @@
       "id": "voirdrama",
       "name": "VoirDrama",
       "description": "https://voirdrama.to/.",
-      "version": "1.0.0",
+      "version": "1.0.5",
       "author": "Maxence",
       "supportedTypes": ["movie", "tv"],
       "filename": "https://raw.githubusercontent.com/themaluxis/All-in-One-Nuvio/refs/heads/main/providers/voirdrama.js",
