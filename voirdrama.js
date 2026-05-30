@@ -1,6 +1,6 @@
 // ============================================================
 // Provider Nuvio : VoirDrama (voirdrama.to)
-// Version      : 2.2.0
+// Version      : 2.3.0
 // Moteur       : Promise chains UNIQUEMENT (Hermes / React Native)
 //                AUCUN async/await, AUCUN require() Node.js
 //                AUCUN regex flag /s (incompat Hermes < 0.12)
@@ -17,15 +17,59 @@ var TMDB_KEY     = '2dca580c2a14b55200e784d157207b4d';
 var _cache = {};
 
 // ─── Helpers réseau ──────────────────────────────────────────
+//
+// Certains appareils Android (typiquement Android 7.0 et antérieurs)
+// n'ont pas la racine "ISRG Root X2" dans leur magasin de certificats,
+// ce qui fait échouer le handshake TLS avec voirdrama.to derrière
+// Cloudflare. Symptôme dans les logs Nuvio :
+//   "Fetch error: Unacceptable certificate: CN=ISRG Root X2, ...".
+// On retombe alors sur r.jina.ai (Jina AI Reader) qui sert le contenu
+// brut depuis un domaine dont la chaîne de certificats est largement
+// acceptée. Les appareils récents continuent à profiter du chemin
+// direct (plus rapide, pas de quota Jina).
+
+var JINA_PROXY = 'https://r.jina.ai/';
+
+// Hosts known to be served behind Cloudflare with ECC certs chaining
+// to ISRG Root X2 — and therefore broken on older Android trust
+// stores. Other hosts (TMDB, sibnet, sendvid, mail.ru) chain to roots
+// in every device store we've seen, so we leave them on the direct
+// path to avoid burning the Jina free quota.
+function needsTlsFallback(url) {
+  return /^https?:\/\/[^/]*(voirdrama\.|vidmoly\.)/i.test(url);
+}
+
+function viaJina(url) {
+  return JINA_PROXY + url;
+}
+
+function rawFetch(url, headers) {
+  return fetch(url, { headers: headers || {} });
+}
+
+// Tries direct first, falls back to Jina if the device rejects the
+// TLS cert (or any network error is thrown). Only applies to
+// voirdrama URLs; other hosts (vidmoly, mail.ru, TMDB) are left
+// alone — they use cert chains that work everywhere we've seen.
+function fetchWithFallback(url, headers) {
+  if (!needsTlsFallback(url)) return rawFetch(url, headers);
+  return rawFetch(url, headers).then(function(r) {
+    if (r && (r.ok || (r.status >= 200 && r.status < 400))) return r;
+    throw new Error('HTTP ' + (r && r.status));
+  }).catch(function(err) {
+    console.warn('[VoirDrama] Fallback Jina pour', url, '(' + (err && err.message) + ')');
+    var jinaHeaders = { 'X-Return-Format': 'html' };
+    if (headers && headers['User-Agent']) jinaHeaders['User-Agent'] = headers['User-Agent'];
+    return rawFetch(viaJina(url), jinaHeaders);
+  });
+}
 
 function getText(url, referer) {
-  return fetch(url, {
-    headers: {
-      'User-Agent': UA,
-      'Referer': referer || VD_REF,
-      'Accept-Language': 'fr-FR,fr;q=0.9',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-    }
+  return fetchWithFallback(url, {
+    'User-Agent': UA,
+    'Referer': referer || VD_REF,
+    'Accept-Language': 'fr-FR,fr;q=0.9',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
   }).then(function(r) {
     if (!r.ok) throw new Error('HTTP ' + r.status + ' — ' + url);
     return r.text();
@@ -33,12 +77,11 @@ function getText(url, referer) {
 }
 
 function getJson(url) {
-  return fetch(url, {
-    headers: { 'User-Agent': UA, 'Accept': 'application/json' }
-  }).then(function(r) {
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    return r.json();
-  });
+  return fetchWithFallback(url, { 'User-Agent': UA, 'Accept': 'application/json' })
+    .then(function(r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    });
 }
 
 // ─── Étape 0 : Conversion IMDb → TMDB ─────────────────────────
@@ -289,17 +332,16 @@ function buildDirectEpisodeUrl(slug, season, episode) {
     return chain.then(function() {
       if (found) return;
       var url = VD_BASE + '/drama/' + slug + '/' + slug + '-' + ep + '-' + lang + '/';
-      return fetch(url, {
-        method: 'HEAD',
-        headers: { 'User-Agent': UA, 'Referer': VD_REF }
-      })
-      .then(function(r) {
-        if (r.ok && r.url.indexOf(ep + '-' + lang) !== -1) {
-          console.log('[VoirDrama] URL directe OK:', r.url);
-          found = r.url;
-        }
-      })
-      .catch(function() {});
+      // HEAD is silently rewritten to GET by NuvioTV's fetch bridge, so
+      // we just do a GET via fetchWithFallback and ask for ok/3xx.
+      return fetchWithFallback(url, { 'User-Agent': UA, 'Referer': VD_REF })
+        .then(function(r) {
+          if (r.ok && (r.url || url).indexOf(ep + '-' + lang) !== -1) {
+            console.log('[VoirDrama] URL directe OK:', r.url || url);
+            found = r.url || url;
+          }
+        })
+        .catch(function() {});
     });
   }, Promise.resolve())
   .then(function() {
@@ -388,12 +430,10 @@ function unpackEval(code) {
 function extractVidmoly(embedUrl) {
   var ref = 'https://' + embedUrl.replace(/^https?:\/\//, '').split('/')[0] + '/';
 
-  return fetch(embedUrl, {
-    headers: {
-      'User-Agent': UA,
-      'Referer': VD_REF,
-      'Origin': VD_BASE
-    }
+  return fetchWithFallback(embedUrl, {
+    'User-Agent': UA,
+    'Referer': VD_REF,
+    'Origin': VD_BASE
   })
   .then(function(r) {
     if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -402,9 +442,8 @@ function extractVidmoly(embedUrl) {
   .then(function(html) {
     var redir = /window\.location\.(?:replace|href)\s*=\s*['"]([^'"]+)['"]/.exec(html);
     if (redir && redir[1] !== embedUrl) {
-      return fetch(redir[1], {
-        headers: { 'User-Agent': UA, 'Referer': ref }
-      }).then(function(r2) { return r2.text(); });
+      return fetchWithFallback(redir[1], { 'User-Agent': UA, 'Referer': ref })
+        .then(function(r2) { return r2.text(); });
     }
     return html;
   })
