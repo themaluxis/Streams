@@ -1,65 +1,20 @@
 // ============================================================
 // Provider Nuvio : VoirDrama (voirdrama.to)
-// Version      : 2.0.0
+// Version      : 2.1.0
 // Moteur       : Promise chains UNIQUEMENT (Hermes / React Native)
 //                AUCUN async/await, AUCUN require() Node.js
+//                AUCUN regex flag /s (incompat Hermes < 0.12)
 // Langues      : VF priorité, fallback VOSTFR
-// Sources      : VIDM (vidmoly.biz) > Vidmoly > Mail.ru > autres
-//
-// Structure réelle du site (vérifiée sur HTML source) :
-//   - Page drama    : /drama/{slug}/
-//   - Page épisode  : /drama/{slug}/{slug}-{NN}-{lang}/
-//     ex : /drama/hidden-love/hidden-love-01-vostfr/
-//   - Sources embed : var thisChapterSources = {"LECTEUR X VIDM":"<iframe...>", ...}
-//     → "VIDM" dans le label = vidmoly.biz (priorité maximale)
-//   - Recherche     : GET /?s={query}&post_type=wp-manga
-//   - Liste épisodes: <option data-redirect="{url}">{numéro}</option>
+// Sources      : VIDM (vidmoly.biz) > Mail.ru > autres
 // ============================================================
 
-var VD_FALLBACK  = 'to';
-var VD_BASE      = 'https://voirdrama.' + VD_FALLBACK;
+var VD_BASE      = 'https://voirdrama.to';
 var VD_REF       = VD_BASE + '/';
 var UA           = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 var TMDB_KEY     = '2dca580c2a14b55200e784d157207b4d';
 
 // Cache mémoire tmdbId → slug voirdrama
-var _cache      = {};
-var _cachedBase = null;
-
-// ─── Détection domaine dynamique ─────────────────────────────
-
-var MIRRORS = [
-  'voirdrama.to',
-  'voirdrama.tv',
-  'voirdrama.org',
-  'voirdrama.my'
-];
-
-function detectVoirDramaBase() {
-  if (_cachedBase) return Promise.resolve(_cachedBase);
-
-  // Teste chaque miroir en séquence, prend le premier qui répond
-  return MIRRORS.reduce(function(chain, domain) {
-    return chain.then(function(found) {
-      if (found) return found;
-      return fetch('https://' + domain + '/', {
-        method: 'HEAD',
-        headers: { 'User-Agent': UA },
-        redirect: 'follow'
-      })
-      .then(function(r) {
-        return (r.ok || r.status < 400) ? 'https://' + domain : null;
-      })
-      .catch(function() { return null; });
-    });
-  }, Promise.resolve(null))
-  .then(function(base) {
-    var result = base || ('https://voirdrama.' + VD_FALLBACK);
-    console.log('[VoirDrama] Base retenue:', result);
-    _cachedBase = result;
-    return result;
-  });
-}
+var _cache = {};
 
 // ─── Helpers réseau ──────────────────────────────────────────
 
@@ -400,7 +355,7 @@ function unpackEval(code) {
     var re = /eval\s*\(\s*function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e\s*,\s*d\s*\)[\s\S]*?\}\s*\(([\s\S]*?)\)\s*\)/g;
     var m = re.exec(code);
     if (!m) return code;
-    var args = m[1].match(/^'([\s\S]*?)',\s*(\d+)\s*,\s*(\d+)\s*,\s*'([\s\S]*?)'\.split\('\|'\)/s);
+    var args = m[1].match(/^'([\s\S]*?)',\s*(\d+)\s*,\s*(\d+)\s*,\s*'([\s\S]*?)'\.split\('\|'\)/);
     if (!args) return code;
     var payload = args[1].replace(/\\'/g, "'");
     var base = parseInt(args[2]), count = parseInt(args[3]);
@@ -518,8 +473,8 @@ function extractSibnet(shellUrl) {
          || /["']((?:https?:)?\/\/[^"'\s]+\.mp4[^"'\s]*)["']/.exec(html);
     if (!m) return null;
     var path = m[1];
-    if (path.startsWith('//')) return { url: 'https:' + path, fmt: 'mp4', referer: 'https://video.sibnet.ru/' };
-    if (path.startsWith('/'))  return { url: 'https://video.sibnet.ru' + path, fmt: 'mp4', referer: 'https://video.sibnet.ru/' };
+    if (path.indexOf('//') === 0) return { url: 'https:' + path, fmt: 'mp4', referer: 'https://video.sibnet.ru/' };
+    if (path.charAt(0) === '/')   return { url: 'https://video.sibnet.ru' + path, fmt: 'mp4', referer: 'https://video.sibnet.ru/' };
     return { url: path, fmt: 'mp4', referer: 'https://video.sibnet.ru/' };
   })
   .catch(function() { return null; });
@@ -655,12 +610,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
       });
   }
 
-  return detectVoirDramaBase()
-    .then(function(base) {
-      VD_BASE = base;
-      VD_REF  = base + '/';
-      return pipeline();
-    })
+  return pipeline()
     .catch(function(err) {
       console.error('[VoirDrama] Erreur pipeline:', err && err.message || err);
       return [];
