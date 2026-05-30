@@ -1,6 +1,6 @@
 // ============================================================
 // Provider Nuvio : VoirDrama (voirdrama.to)
-// Version      : 2.1.0
+// Version      : 2.1.0 (Updated with IMDb Support)
 // Moteur       : Promise chains UNIQUEMENT (Hermes / React Native)
 //                AUCUN async/await, AUCUN require() Node.js
 //                AUCUN regex flag /s (incompat Hermes < 0.12)
@@ -39,6 +39,37 @@ function getJson(url) {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     return r.json();
   });
+}
+
+// ─── Étape 0 : Conversion IMDb → TMDB ─────────────────────────
+
+function resolveToTmdbId(id) {
+  // Si c'est déjà un ID TMDB (uniquement des chiffres)
+  if (/^\d+$/.test(id)) {
+    return Promise.resolve(id);
+  }
+
+  // Si c'est un ID IMDb (commence par "tt" suivi de chiffres)
+  if (/^tt\d+$/.test(id)) {
+    var url = 'https://api.themoviedb.org/3/find/' + id + '?api_key=' + TMDB_KEY + '&external_source=imdb_id';
+    console.log('[VoirDrama] Conversion IMDb -> TMDB:', url);
+    
+    return getJson(url).then(function(d) {
+      // Cherche dans les résultats films, puis séries
+      var results = d.movie_results || [];
+      if (!results.length) results = d.tv_results || [];
+      
+      if (!results.length) {
+        throw new Error('Aucun équivalent TMDB trouvé pour l\'IMDb ID: ' + id);
+      }
+      
+      var tmdbId = results[0].id.toString();
+      console.log('[VoirDrama] IMDb (' + id + ') résolu en TMDB (' + tmdbId + ')');
+      return tmdbId;
+    });
+  }
+
+  return Promise.reject(new Error('Format d\'ID non reconnu: ' + id));
 }
 
 // ─── Étape 1 : tmdbId → titres candidats ─────────────────────
@@ -162,28 +193,13 @@ function resolveSlug(tmdbId, titles) {
 }
 
 // ─── Étape 3 : Récupération page épisode ─────────────────────
-//
-// URL épisode réelle : /drama/{slug}/{slug}-{NN}-{lang}/
-// ex : /drama/hidden-love/hidden-love-01-vostfr/
-//
-// Stratégie :
-//   1. Fetch la page drama /drama/{slug}/
-//   2. Extraire toutes les options data-redirect → liste des URLs d'épisodes
-//   3. Trouver l'URL correspondant au numéro demandé (VF d'abord, VOSTFR sinon)
-//
-// Fallback : construction directe avec padding 2 chiffres
 
 function padEp(n) {
-  // VoirDrama utilise toujours le padding 2 chiffres (01, 02 ... 09, 10, 11...)
-  // Sauf pour les épisodes > 99 qui restent non-paddés (100, 101...)
   if (n < 10) return '0' + n;
   return '' + n;
 }
 
 function fetchEpisodePage(slug, season, episode) {
-  // VoirDrama ne gère pas les saisons via l'URL (pas de /saison-N/).
-  // La gestion multi-saison est intégrée dans le slug de l'épisode lui-même.
-  // On cherche dans la liste des épisodes de la page drama.
   var dramaUrl = VD_BASE + '/drama/' + slug + '/';
 
   return getText(dramaUrl, VD_REF)
@@ -198,7 +214,6 @@ function fetchEpisodePage(slug, season, episode) {
       });
     })
     .catch(function(err) {
-      // Fallback : construction directe de l'URL
       console.warn('[VoirDrama] Fallback URL directe:', err.message);
       return buildDirectEpisodeUrl(slug, season, episode);
     });
@@ -206,21 +221,17 @@ function fetchEpisodePage(slug, season, episode) {
 
 function parseEpisodeList(html, slug, season, episode) {
   var langOrder = ['vf', 'vostfr'];
-  var results   = {}; // {lang: {epNum: url}}
+  var results   = {}; 
 
-  // 1. Catch <a> tags (Standard for the main Drama page)
   var reA = /href=["'](https?:\/\/[^"']+\/drama\/[^"'\/]+\/([^"'\/]+))\/?["']/gi;
-  // 2. Catch <option> tags (Standard inside the reader)
   var reOpt = /data-redirect=["'](https?:\/\/[^"']+\/drama\/[^"'\/]+\/([^"'\/]+))\/?["']/gi;
 
   function processMatch(m) {
     var fullUrl = m[1];
-    var epSlug  = m[2].toLowerCase(); // ex: hidden-love-01-vostfr
+    var epSlug  = m[2].toLowerCase(); 
 
-    // Ensure the URL belongs to this exact drama (ignores recommended links)
     if (fullUrl.indexOf('/drama/' + slug + '/') === -1) return;
 
-    // Safely extract the episode number and language directly from the URL slug
     var epMatch = epSlug.match(/-(\d+)-(vf|vostfr)/);
     if (!epMatch) return;
 
@@ -238,7 +249,6 @@ function parseEpisodeList(html, slug, season, episode) {
   console.log('[VoirDrama] Épisodes extraits -> VF:', Object.keys(results['vf'] || {}).length, 
               '| VOSTFR:', Object.keys(results['vostfr'] || {}).length);
 
-  // Preference: VF first, then VOSTFR
   for (var i = 0; i < langOrder.length; i++) {
     var lang2 = langOrder[i];
     if (results[lang2] && results[lang2][episode]) {
@@ -264,7 +274,6 @@ function buildDirectEpisodeUrl(slug, season, episode) {
         headers: { 'User-Agent': UA, 'Referer': VD_REF }
       })
       .then(function(r) {
-        // Only accept if OK AND it didn't redirect back to the drama index
         if (r.ok && r.url.indexOf(ep + '-' + lang) !== -1) {
           console.log('[VoirDrama] URL directe OK:', r.url);
           found = r.url;
@@ -282,15 +291,8 @@ function buildDirectEpisodeUrl(slug, season, episode) {
 }
 
 // ─── Étape 4 : Extraction des sources depuis la page épisode ─
-//
-// Le site stocke toutes les sources dans :
-//   var thisChapterSources = {"☰ LECTEUR 6 VIDM":"<iframe src=\"...\">","☰ LECTEUR 3 RU":"..."};
-//
-// Chaque valeur est du HTML d'iframe encodé en JSON string.
-// La clé contient le nom du lecteur (ex: "VIDM", "RU", "FR"...).
 
 function parseChapterSources(html) {
-  // Extrait l'objet thisChapterSources
   var re = /var\s+thisChapterSources\s*=\s*(\{[\s\S]*?\})\s*;/;
   var m  = re.exec(html);
   if (!m) {
@@ -299,7 +301,6 @@ function parseChapterSources(html) {
   }
 
   var rawJson = m[1];
-  // Décode les séquences unicode (\uXXXX) — le site encode ☰ en \u2630
   rawJson = rawJson.replace(/\\u([0-9a-fA-F]{4})/g, function(_, hex) {
     return String.fromCharCode(parseInt(hex, 16));
   });
@@ -309,7 +310,6 @@ function parseChapterSources(html) {
     sources = JSON.parse(rawJson);
   } catch (e) {
     console.warn('[VoirDrama] JSON.parse thisChapterSources échoué:', e.message);
-    // Fallback : extraction manuelle des src d'iframe
     sources = {};
     var fallbackRe = /"([^"]+)"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
     var fm;
@@ -321,7 +321,6 @@ function parseChapterSources(html) {
   var result = [];
   Object.keys(sources).forEach(function(label) {
     var iframeHtml = sources[label] || '';
-    // Extrait le src de l'iframe
     var srcM = /src=["']([^"']+)["']/.exec(iframeHtml);
     if (srcM && srcM[1].indexOf('http') === 0) {
       result.push({ label: label, url: srcM[1] });
@@ -329,7 +328,6 @@ function parseChapterSources(html) {
     }
   });
 
-  // Trie : VIDM en premier (le reste est secondaire)
   result.sort(function(a, b) {
     var aIsVidm = a.label.toUpperCase().indexOf('VIDM') !== -1 ? 1 : 0;
     var bIsVidm = b.label.toUpperCase().indexOf('VIDM') !== -1 ? 1 : 0;
@@ -339,7 +337,6 @@ function parseChapterSources(html) {
   return result;
 }
 
-// Détecte la langue depuis l'URL de l'épisode
 function detectLangFromUrl(url) {
   var u = url.toLowerCase();
   if (/-vf\//.test(u) || /-vf$/.test(u)) return 'vf';
@@ -348,7 +345,6 @@ function detectLangFromUrl(url) {
 
 // ─── Étape 5 : Extracteurs embed ─────────────────────────────
 
-// Désobfuscateur p,a,c,k,e,d
 function unpackEval(code) {
   try {
     if (code.indexOf('p,a,c,k,e,d') === -1) return code;
@@ -369,15 +365,13 @@ function unpackEval(code) {
   } catch (e) { return code; }
 }
 
-// ── Extracteur générique JW Player / vidmoly (vidmoly.biz = VIDM sur VoirDrama) ──
 function extractVidmoly(embedUrl) {
-  // Accepte tous les domaines vidmoly (to, me, biz, net, ru, is)
   var ref = 'https://' + embedUrl.replace(/^https?:\/\//, '').split('/')[0] + '/';
 
   return fetch(embedUrl, {
     headers: {
       'User-Agent': UA,
-      'Referer': VD_REF,   // Referer = voirdrama (anti-hotlink)
+      'Referer': VD_REF,
       'Origin': VD_BASE
     }
   })
@@ -386,7 +380,6 @@ function extractVidmoly(embedUrl) {
     return r.text();
   })
   .then(function(html) {
-    // Suit une éventuelle redirection JS
     var redir = /window\.location\.(?:replace|href)\s*=\s*['"]([^'"]+)['"]/.exec(html);
     if (redir && redir[1] !== embedUrl) {
       return fetch(redir[1], {
@@ -398,13 +391,11 @@ function extractVidmoly(embedUrl) {
   .then(function(html) {
     if (html.indexOf('p,a,c,k,e,d') !== -1) html = unpackEval(html);
 
-    // m3u8 (prioritaire — HD adaptatif)
     var m3 = /file\s*:\s*["']([^"']+\.m3u8[^"']*)["']/i.exec(html)
           || /["'](https?:\/\/[^"']+\.m3u8[^"'"\s]*)["']/i.exec(html)
           || /<source[^>]+src=["']([^"']+\.m3u8[^"']*)["']/i.exec(html);
     if (m3) return { url: m3[1], fmt: 'm3u8', referer: ref };
 
-    // mp4
     var m4 = /file\s*:\s*["']([^"']+\.mp4[^"']*)["']/i.exec(html)
           || /["'](https?:\/\/[^"']+\.mp4[^"'"\s]*)["']/i.exec(html);
     if (m4) return { url: m4[1], fmt: 'mp4', referer: ref };
@@ -417,9 +408,7 @@ function extractVidmoly(embedUrl) {
   });
 }
 
-// ── Mail.ru (LECTEUR X RU) ──
 function extractMailRu(embedUrl) {
-  // my.mail.ru retourne directement un player HTML avec les sources
   return fetch(embedUrl, {
     headers: {
       'User-Agent': UA,
@@ -431,7 +420,6 @@ function extractMailRu(embedUrl) {
     return r.text();
   })
   .then(function(html) {
-    // Mail.ru encode les sources vidéo dans un attribut data-vars JSON
     var dataM = /data-vars=["']([^"']+)["']/.exec(html);
     if (dataM) {
       try {
@@ -439,14 +427,12 @@ function extractMailRu(embedUrl) {
         var data = JSON.parse(decoded);
         var videos = (data && data.videos) || [];
         if (videos.length) {
-          // Prend la meilleure qualité disponible
           var best = videos[videos.length - 1];
           return { url: best.url, fmt: best.url.indexOf('.m3u8') !== -1 ? 'm3u8' : 'mp4', referer: 'https://my.mail.ru/' };
         }
       } catch (e) { /* ignore */ }
     }
 
-    // Fallback : patterns directs m3u8/mp4
     var m3 = /["'](https?:\/\/[^"']+\.m3u8[^"'"\s]*)["']/i.exec(html);
     if (m3) return { url: m3[1], fmt: 'm3u8', referer: 'https://my.mail.ru/' };
 
@@ -461,7 +447,6 @@ function extractMailRu(embedUrl) {
   });
 }
 
-// ── Sibnet ──
 function extractSibnet(shellUrl) {
   return fetch(shellUrl, {
     headers: { 'User-Agent': UA, 'Referer': 'https://video.sibnet.ru/' }
@@ -480,7 +465,6 @@ function extractSibnet(shellUrl) {
   .catch(function() { return null; });
 }
 
-// ── Sendvid ──
 function extractSendvid(embedUrl) {
   var url = embedUrl.indexOf('/embed/') !== -1
     ? embedUrl
@@ -507,11 +491,9 @@ function extractSendvid(embedUrl) {
   .catch(function() { return null; });
 }
 
-// ── Dispatch : identifie la source et appelle le bon extracteur ──
-
 function classifySource(url) {
   var u = (url || '').toLowerCase();
-  if (/vidmoly\.(biz|to|me|net|ru|is)/.test(u)) return 'vidmoly';  // VIDM sur VoirDrama
+  if (/vidmoly\.(biz|to|me|net|ru|is)/.test(u)) return 'vidmoly'; 
   if (/my\.mail\.ru/.test(u))                    return 'mailru';
   if (/sibnet\.ru/.test(u))                      return 'sibnet';
   if (/sendvid\.com/.test(u))                    return 'sendvid';
@@ -534,9 +516,8 @@ function extractUrl(embedUrl) {
 
 // ─── Étape 6 : Priorités et construction des streams ─────────
 
-// VIDM (= vidmoly.biz) est la source prioritaire demandée par l'utilisateur
 var PRIO = {
-  vidmoly:  100,   // VIDM sur VoirDrama → priorité maximale
+  vidmoly:  100,
   mailru:    60,
   sibnet:    50,
   sendvid:   55,
@@ -555,7 +536,6 @@ function buildStreams(sources, lang, season, episode) {
 
   var promises = sources.map(function(source) {
     var type = classifySource(source.url);
-    // Boost supplémentaire si le label contient "VIDM" (sécurité double)
     var labelBoost = source.label.toUpperCase().indexOf('VIDM') !== -1 ? 10 : 0;
 
     return extractUrl(source.url).then(function(res) {
@@ -585,17 +565,23 @@ function buildStreams(sources, lang, season, episode) {
 
 // ─── Interface publique Nuvio ─────────────────────────────────
 
-function getStreams(tmdbId, mediaType, season, episode) {
+function getStreams(providedId, mediaType, season, episode) {
   var s = season  || 1;
   var e = episode || 1;
 
-  console.log('[VoirDrama] getStreams tmdbId=' + tmdbId + ' type=' + mediaType + ' S' + s + 'E' + e);
+  console.log('[VoirDrama] getStreams ID=' + providedId + ' type=' + mediaType + ' S' + s + 'E' + e);
 
   function pipeline() {
-    return getTitlesFromTmdb(tmdbId, mediaType)
+    var resolvedTmdbId;
+
+    return resolveToTmdbId(providedId)
+      .then(function(tmdbId) {
+        resolvedTmdbId = tmdbId; 
+        return getTitlesFromTmdb(resolvedTmdbId, mediaType);
+      })
       .then(function(titles) {
         if (!titles.length) throw new Error('Aucun titre TMDB');
-        return resolveSlug(tmdbId, titles);
+        return resolveSlug(resolvedTmdbId, titles); 
       })
       .then(function(slug) {
         if (!slug) throw new Error('Slug introuvable');
