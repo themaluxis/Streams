@@ -1,6 +1,6 @@
 // ============================================================
 // Provider Nuvio : Kisskh
-// Version      : 2.0.0
+// Version      : 2.1.0
 // Engine       : Hermes / React Native (no async/await, no Node deps)
 // Streams      : kisskh.ovh video API (kkey via Apps Script proxy)
 // Subtitles    : kisskh.ovh /api/Sub (kkey via stream kkey, then Vercel
@@ -303,11 +303,29 @@ function fetchSubtitles(epsId, kkey) {
 
 // ─── Main pipeline ───────────────────────────────────────────
 
-function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
+// Accepts either a TMDB numeric id or an IMDb id ("ttXXXXXXX"); IMDb
+// ids are resolved via /3/find first so the provider works with Nuvio
+// configured for any of TMDB / TheTVDB / IMDb metadata.
+function resolveTmdbId(id, mediaType) {
+  var s = String(id || "");
+  if (!/^tt\d+$/i.test(s)) return Promise.resolve(s);
+  var url = "https://api.themoviedb.org/3/find/" + s
+    + "?api_key=" + TMDB_KEY + "&external_source=imdb_id";
+  return fetch(url).then(function(r) { return r.json(); }).then(function(d) {
+    var pool = (mediaType === "movie")
+      ? (d.movie_results || []).concat(d.tv_results || [])
+      : (d.tv_results    || []).concat(d.movie_results || []);
+    if (!pool.length) throw new Error("IMDb id " + s + " has no TMDB match");
+    return String(pool[0].id);
+  });
+}
+
+function getStreams(rawId, mediaType, seasonNum, episodeNum) {
   return new Promise(function(resolve) {
+    resolveTmdbId(rawId, mediaType).then(function(tmdbId) {
     var tmdbUrl = "https://api.themoviedb.org/3/" + mediaType + "/" + tmdbId + "?api_key=" + TMDB_KEY;
 
-    fetch(tmdbUrl)
+    return fetch(tmdbUrl)
       .then(function(r) { return r.json(); })
       .then(function(tmdbData) {
         var title = tmdbData.title || tmdbData.name || tmdbData.original_title;
@@ -377,11 +395,12 @@ function getStreams(tmdbId, mediaType, seasonNum, episodeNum) {
         });
 
         resolve(streams);
-      })
-      .catch(function(err) {
-        console.error("KISSKH ERROR:", err && err.message || err);
-        resolve([]);
       });
+    })
+    .catch(function(err) {
+      console.error("KISSKH ERROR:", err && err.message || err);
+      resolve([]);
+    });
   });
 }
 
