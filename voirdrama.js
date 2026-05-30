@@ -1,6 +1,6 @@
 // ============================================================
 // Provider Nuvio : VoirDrama (voirdrama.to)
-// Version      : 2.1.0 (Updated with IMDb Support)
+// Version      : 2.2.0
 // Moteur       : Promise chains UNIQUEMENT (Hermes / React Native)
 //                AUCUN async/await, AUCUN require() Node.js
 //                AUCUN regex flag /s (incompat Hermes < 0.12)
@@ -73,6 +73,26 @@ function resolveToTmdbId(id) {
 }
 
 // ─── Étape 1 : tmdbId → titres candidats ─────────────────────
+
+// Accepts either a numeric TMDB id or an IMDb id ("ttXXXXXXX").
+// IMDb ids are resolved to a TMDB id via /3/find before the regular
+// lookup, so Nuvio works whether its metadata provider is TMDB,
+// TheTVDB (which still routes through TMDB ids) or IMDb.
+function resolveTmdbId(id, mediaType) {
+  var s = String(id || '');
+  if (!/^tt\d+$/i.test(s)) return Promise.resolve(s);
+  var url = 'https://api.themoviedb.org/3/find/' + s
+    + '?api_key=' + TMDB_KEY + '&external_source=imdb_id';
+  console.log('[VoirDrama] IMDb→TMDB:', url);
+  return getJson(url).then(function(d) {
+    var pool = (mediaType === 'movie')
+      ? (d.movie_results || []).concat(d.tv_results || [])
+      : (d.tv_results    || []).concat(d.movie_results || []);
+    if (!pool.length) throw new Error('IMDb id ' + s + ' has no TMDB match');
+    console.log('[VoirDrama] IMDb→TMDB résolu:', pool[0].id);
+    return String(pool[0].id);
+  });
+}
 
 function getTitlesFromTmdb(tmdbId, mediaType) {
   var type = (mediaType === 'movie') ? 'movie' : 'tv';
@@ -565,20 +585,15 @@ function buildStreams(sources, lang, season, episode) {
 
 // ─── Interface publique Nuvio ─────────────────────────────────
 
-function getStreams(providedId, mediaType, season, episode) {
+function getStreams(rawId, mediaType, season, episode) {
   var s = season  || 1;
   var e = episode || 1;
 
-  console.log('[VoirDrama] getStreams ID=' + providedId + ' type=' + mediaType + ' S' + s + 'E' + e);
+  console.log('[VoirDrama] getStreams id=' + rawId + ' type=' + mediaType + ' S' + s + 'E' + e);
 
   function pipeline() {
-    var resolvedTmdbId;
-
-    return resolveToTmdbId(providedId)
-      .then(function(tmdbId) {
-        resolvedTmdbId = tmdbId; 
-        return getTitlesFromTmdb(resolvedTmdbId, mediaType);
-      })
+    return resolveTmdbId(rawId, mediaType).then(function(tmdbId) {
+      return getTitlesFromTmdb(tmdbId, mediaType)
       .then(function(titles) {
         if (!titles.length) throw new Error('Aucun titre TMDB');
         return resolveSlug(resolvedTmdbId, titles); 
@@ -594,6 +609,7 @@ function getStreams(providedId, mediaType, season, episode) {
         console.log('[VoirDrama] Langue:', lang.toUpperCase(), '| Sources:', sources.length);
         return buildStreams(sources, lang, s, e);
       });
+    });
   }
 
   return pipeline()
