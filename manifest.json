@@ -6,7 +6,7 @@
       "id": "kisskh",
       "name": "Kisskh",
       "description": "Streams Korean dramas and movies from onlykdrama.top",
-      "version": "1.2.3",
+      "version": "1.3.0",
       "author": "Malu",
       "supportedTypes": ["movie", "tv"],
       "filename": "https://raw.githubusercontent.com/themaluxis/Streams/refs/heads/main/kisskh.js",
