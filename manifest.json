@@ -19,7 +19,7 @@
       "id": "voirdrama",
       "name": "VoirDrama",
       "description": "https://voirdrama.to/.",
-      "version": "4.5.9",
+      "version": "4.6.1",
       "author": "Malu",
       "supportedTypes": ["movie", "tv"],
       "filename": "https://raw.githubusercontent.com/themaluxis/Streams/refs/heads/main/voirdrama.js",
