@@ -596,7 +596,7 @@ function getStreams(rawId, mediaType, season, episode) {
       return getTitlesFromTmdb(tmdbId, mediaType)
       .then(function(titles) {
         if (!titles.length) throw new Error('Aucun titre TMDB');
-        return resolveSlug(resolvedTmdbId, titles); 
+        return resolveSlug(tmdbId, titles);
       })
       .then(function(slug) {
         if (!slug) throw new Error('Slug introuvable');
